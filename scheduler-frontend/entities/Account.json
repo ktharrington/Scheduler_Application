@@ -1,0 +1,40 @@
+{
+    "name": "Account",
+    "type": "object",
+    "properties": {
+      "handle": {
+        "type": "string",
+        "description": "Instagram handle (without @)"
+      },
+      "ig_business_id": {
+        "type": "string",
+        "description": "Instagram Business Account ID"
+      },
+      "access_token": {
+        "type": "string",
+        "description": "Instagram Graph API access token (mock in preview)"
+      },
+      "token_expires_at": {
+        "type": "string",
+        "format": "date-time",
+        "description": "When the access token expires"
+      },
+      "timezone": {
+        "type": "string",
+        "default": "UTC",
+        "description": "Account timezone"
+      },
+      "is_active": {
+        "type": "boolean",
+        "default": true,
+        "description": "Whether account is active"
+      },
+      "color": {
+        "type": "string",
+        "description": "Color used to identify the account in UI (hex)"
+      }
+    },
+    "required": [
+      "handle"
+    ]
+  }

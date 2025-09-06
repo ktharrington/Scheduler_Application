@@ -1,0 +1,72 @@
+{
+    "name": "ScheduledPost",
+    "type": "object",
+    "properties": {
+      "account_id": {
+        "type": "string",
+        "description": "ID of the Account entity this post belongs to"
+      },
+      "media_url": {
+        "type": "string",
+        "description": "URL of the media file"
+      },
+      "media_type": {
+        "type": "string",
+        "enum": [
+          "photo",
+          "video",
+          "carousel"
+        ],
+        "default": "photo",
+        "description": "Type of media"
+      },
+      "caption": {
+        "type": "string",
+        "description": "Post caption"
+      },
+      "first_comment": {
+        "type": "string",
+        "description": "Optional first comment"
+      },
+      "scheduled_at": {
+        "type": "string",
+        "format": "date-time",
+        "description": "When to post"
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "draft",
+          "scheduled",
+          "posting",
+          "posted",
+          "failed",
+          "cancelled"
+        ],
+        "default": "scheduled",
+        "description": "Current status"
+      },
+      "posted_at": {
+        "type": "string",
+        "format": "date-time",
+        "description": "When actually posted"
+      },
+      "error_message": {
+        "type": "string",
+        "description": "Error message if failed"
+      },
+      "ig_container_id": {
+        "type": "string",
+        "description": "Instagram container ID"
+      },
+      "ig_publish_id": {
+        "type": "string",
+        "description": "Instagram published post ID"
+      }
+    },
+    "required": [
+      "account_id",
+      "media_url",
+      "scheduled_at"
+    ]
+  }

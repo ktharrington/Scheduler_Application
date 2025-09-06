@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+psycopg[binary,pool]
+redis
+rq
+python-dotenv
+pydantic
+python-dateutil
+requests
+python-multipart
+boto3>=1.34,<2

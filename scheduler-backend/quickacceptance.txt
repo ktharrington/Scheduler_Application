@@ -1,0 +1,23 @@
+docker compose up --build -d
+docker exec -it scheduler_api psql "$DATABASE_URL" -f app/schema.sql
+
+# health
+curl -s http://localhost:8080/api/health
+
+# (optional) refresh accounts
+curl -s -X POST http://localhost:8080/api/accounts/refresh \
+  -H 'content-type: application/json' \
+  -d '{"token":"'"$META_LONG_LIVED_TOKEN"'","timezone":"America/Los_Angeles"}'
+
+# list accounts
+curl -s http://localhost:8080/api/accounts
+
+# upload media (replace ACC and file path)
+curl -s -F account_id=ACC -F file=@/path/to/photo.jpg \
+  -F caption='sunset on 12 green' http://localhost:8080/api/media/upload
+
+# create a post scheduled soon
+WHEN=$(date -u -d '+10 minutes' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || gdate -u -d '+10 minutes' +%Y-%m-%dT%H:%M:%SZ)
+curl -s -X POST http://localhost:8080/api/posts \
+  -H 'content-type: application/json' \
+  -d '{"account_id": ACC, "post_type":"photo", "asset_id": ASSET_ID, "caption":"", "scheduled_at":"'$WHEN'","client_request_id":"demo-1"}'
