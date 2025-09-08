@@ -1,30 +1,21 @@
+# docker-compose.override.yml
+# Developer-friendly overrides applied on top of docker-compose.yml.
+# Compose automatically loads this file (no extra flags needed).
+# - Mount source code for live edits
+# - Add sensible restart policies
+
 services:
   api:
-    env_file:
-      - .env
-    environment:
-      - MEDIA_BACKEND=${MEDIA_BACKEND}
-      - STORAGE_BACKEND=${STORAGE_BACKEND}
-      - S3_PROVIDER=${S3_PROVIDER}
-      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL}
-      - S3_REGION=${S3_REGION}
-      - S3_BUCKET=${S3_BUCKET}
-      - S3_PREFIX=${S3_PREFIX}
-      - S3_PUBLIC_BASE_URL=${S3_PUBLIC_BASE_URL}
-      - S3_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID}
-      - S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY}
+    volumes:
+      - ./:/code
+    restart: unless-stopped
+
+  scheduler:
+    volumes:
+      - ./:/code
+    restart: unless-stopped
 
   worker:
-    env_file:
-      - .env
-    environment:
-      - MEDIA_BACKEND=${MEDIA_BACKEND}
-      - STORAGE_BACKEND=${STORAGE_BACKEND}
-      - S3_PROVIDER=${S3_PROVIDER}
-      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL}
-      - S3_REGION=${S3_REGION}
-      - S3_BUCKET=${S3_BUCKET}
-      - S3_PREFIX=${S3_PREFIX}
-      - S3_PUBLIC_BASE_URL=${S3_PUBLIC_BASE_URL}
-      - S3_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID}
-      - S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY}
+    volumes:
+      - ./:/code
+    restart: unless-stopped

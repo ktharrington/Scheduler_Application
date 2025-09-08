@@ -1,7 +1,8 @@
-// components/hooks/useRangedPosts.js
+// components/hooks/useRangedPosts.js — DROP-IN REPLACEMENT
 import React from "react";
 import { fetchPostsRange } from "@/components/api/PostsClient";
 
+/** simple utilities */
 function isWithinRange(d, start, end) {
   const t = new Date(d).getTime();
   return t >= new Date(start).getTime() && t <= new Date(end).getTime();
@@ -14,75 +15,111 @@ async function tryListAllPostsFromEntity() {
       (await import("@/entities/ScheduledPost").catch(() => null)) ||
       (await import("@/Entities/ScheduledPost").catch(() => null));
     const ScheduledPost = mod?.ScheduledPost || mod?.default;
-    if (ScheduledPost?.list) return await ScheduledPost.list();
-  } catch {}
-  return null;
+    if (!ScheduledPost || typeof ScheduledPost.listAll !== "function") return [];
+    const all = await ScheduledPost.listAll();
+    return Array.isArray(all) ? all : [];
+  } catch {
+    return [];
+  }
 }
 
-// Simple in-memory cache: key = accountId|startISO|endISO
-const cache = new Map();
-
+/**
+ * useRangedPosts
+ * @param {object} opts
+ * @param {number|string} opts.accountId
+ * @param {string} opts.startISO  // inclusive
+ * @param {string} opts.endISO    // inclusive
+ * @param {string|number} [opts.key] // cache-busting dep you already pass around
+ * @param {boolean} [opts.allowListFallback=false] // if API fails, try local entity
+ * @param {Array} [opts.fallbackSnapshot] // optional pre-fetched list for quick paint
+ */
 export function useRangedPosts({
   accountId,
   startISO,
   endISO,
-  fallbackAllPosts = [],
+  key,
   allowListFallback = false,
+  fallbackSnapshot = null,
 }) {
-  const key = `${String(accountId)}|${startISO}|${endISO}`;
-  const [posts, setPosts] = React.useState(() => cache.get(key) || []);
+  const [posts, setPosts] = React.useState(() => {
+    // seed with snapshot if provided
+    if (Array.isArray(fallbackSnapshot)) {
+      return fallbackSnapshot.filter(
+        (p) =>
+          String(p.account_id) === String(accountId) &&
+          isWithinRange(p.scheduled_at, startISO, endISO)
+      );
+    }
+    return [];
+  });
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
   const [version, setVersion] = React.useState(0);
 
-  const load = React.useCallback(async () => {
+  const load = React.useCallback(() => {
+    // guard missing inputs
     if (!accountId || !startISO || !endISO) {
       setPosts([]);
-      return;
+      setLoading(false);
+      setError(null);
+      return () => {};
     }
-    setLoading(true);
-    setError(null);
-    try {
-      // 1) backend range endpoint
-      const ranged = await fetchPostsRange({ accountId, startISO, endISO });
-      if (Array.isArray(ranged)) {
-        cache.set(key, ranged);
-        setPosts(ranged);
-        return;
-      }
 
-      // 2) optional fallbacks
-      if (allowListFallback) {
-        let all =
-          (Array.isArray(fallbackAllPosts) && fallbackAllPosts.length > 0
-            ? fallbackAllPosts
-            : await tryListAllPostsFromEntity()) || [];
+    const controller = new AbortController();
+    const { signal } = controller;
 
-        const filtered = all.filter((p) => {
-          const pid =
-            p.account_id ?? p.accountId ?? p.account?.id ?? p.owner_id;
-          const when = p.scheduled_at ?? p.scheduledAt ?? p.time ?? p.when;
-          return (
-            String(pid) === String(accountId) &&
-            when &&
-            isWithinRange(when, startISO, endISO)
-          );
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const data = await fetchPostsRange({
+          accountId,
+          startISO,
+          endISO,
+          signal,
         });
 
-        cache.set(key, filtered);
-        setPosts(filtered);
-        return;
+        // Accept either array or { items }
+        const arr = Array.isArray(data) ? data : data?.items || [];
+
+        // Final client-side filter (harmless if server already filtered)
+        const filtered = arr.filter(
+          (p) =>
+            String(p.account_id) === String(accountId) &&
+            isWithinRange(p.scheduled_at, startISO, endISO)
+        );
+
+        if (!signal.aborted) setPosts(filtered);
+      } catch (e) {
+        if (signal.aborted) return; // ignore aborts
+        if (allowListFallback) {
+          const all = await tryListAllPostsFromEntity();
+          const fallback = all.filter(
+            (p) =>
+              String(p.account_id) === String(accountId) &&
+              isWithinRange(p.scheduled_at, startISO, endISO)
+          );
+          if (!signal.aborted) {
+            setPosts(fallback);
+            setError(null);
+            setLoading(false);
+            return;
+          }
+        }
+        setError(e);
+      } finally {
+        if (!signal.aborted) setLoading(false);
       }
+    })();
 
-      setPosts([]);
-    } catch (e) {
-      setError(e?.message || "Failed to load posts");
-    } finally {
-      setLoading(false);
-    }
-  }, [accountId, startISO, endISO, key, fallbackAllPosts, allowListFallback]);
+    return () => controller.abort();
+  }, [accountId, startISO, endISO, key, allowListFallback, fallbackSnapshot]);
 
-  React.useEffect(() => { load(); }, [load, version]);
+  React.useEffect(() => {
+    const cleanup = load();
+    return typeof cleanup === "function" ? cleanup : undefined;
+  }, [load, version]);
+
   const refetch = () => setVersion((v) => v + 1);
 
   return { posts, loading, error, refetch };

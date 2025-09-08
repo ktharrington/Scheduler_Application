@@ -9,8 +9,35 @@ import { Label } from "@/components/ui/label";
 import { X, Save, Trash2, Send, Wand2, AlertTriangle } from "lucide-react";
 import { format, parseISO } from "date-fns";
 import { Badge } from "@/components/ui/badge";
+import * as PostsClient from "../api/PostsClient";
+
 
 const MIN_SPACING = 15; // minutes
+const CAROUSEL_ENABLED = false;
+
+
+
+const isPlaceholderHost = (u = "") => {
+  try { return /(^|\.)your-public-r2-domain\.r2\.dev$/i.test(new URL(u).hostname); }
+  catch { return false; }
+};
+
+const VIDEO_EXTS = ["mp4","mov","m4v","webm"];
+const looksLikeVideo = (u) => {
+  if (!u) return false;
+  try { u = new URL(u).pathname; } catch {}
+  const m = String(u).toLowerCase().match(/\.([a-z0-9]+)(?:$|\?)/);
+  const ext = m?.[1] || "";
+  return VIDEO_EXTS.includes(ext);
+};
+const isPng = (u) => {
+  if (!u) return false;
+  try { u = new URL(u).pathname; } catch {}
+  try { u = decodeURIComponent(u); } catch {}
+  return /\.png(?:$|\?)/i.test(String(u));
+};
+
+
 
 // ---------- time helpers ----------
 const toLocalInputValue = (dateish) =>
@@ -67,6 +94,21 @@ function pickHumanMinute(existingMins, dayStartMin = 8 * 60, dayEndMin = 22 * 60
   return candidate;
 }
 
+
+function extractCaptionFromString(s) {
+  if (!s) return null;
+  try {
+    s = new URL(s).pathname; // use path if it's a URL
+  } catch (_) {}
+  try { s = decodeURIComponent(s); } catch (_) {}
+  const fname = String(s).split(/[\\/]/).pop() || s;
+  const m = fname.match(/\*{5}([^*]{1,200})\*{5}/);
+  return m ? m[1] : null;
+}
+
+
+
+
 export default function PostEditor({
   post,
   defaultDate,
@@ -87,15 +129,20 @@ export default function PostEditor({
 
   const [formData, setFormData] = useState({
     media_url: post?.media_url || "",
-    media_type: post?.media_type || "photo",
+    post_type: post?.post_type || "photo",
     caption: post?.caption || "",
     first_comment: post?.first_comment || "",
     scheduled_at: initialWhen, // "yyyy-MM-dd'T'HH:mm" for datetime-local
   });
 
+
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [overrideSpacing, setOverrideSpacing] = useState(false);
   const [readOnly, setReadOnly] = useState(Boolean(initialReadOnly));
   useEffect(() => setReadOnly(Boolean(initialReadOnly)), [initialReadOnly, post?.id]);
+  const [isCarousel, setIsCarousel] = useState(false);
+  const [carouselUrls, setCarouselUrls] = useState(["",""]); // start with 2 slots
+  const [reelMode, setReelMode] = useState("feed_and_reels"); // or "reels_only"
 
   // ---------- compute existing same-day minutes ----------
   const sameDay = useMemo(() => (formData.scheduled_at || "").slice(0, 10), [formData.scheduled_at]);
@@ -143,46 +190,132 @@ export default function PostEditor({
     recomputeConflict(v);
   };
 
-  const doSave = async (payload) => {
+  const doSave = async (extras = {}) => {
     setIsSubmitting(true);
     try {
-      await onSave(payload);
+      // V1: carousels disabled
+      if (isCarousel) {
+        alert("Carousels are temporarily disabled in v1. Please post as a single photo or reel.");
+        return; // isSubmitting resets in finally {}
+}
+
+      // Build payload for API
+      let payload;
+
+      // Carousel: package child URLs as JSON (enforced max 10 items)
+      if (isCarousel) {
+        const urls = (carouselUrls || [])
+          .map((s) => String(s || "").trim())
+          .filter(Boolean)
+          .slice(0, 10);
+        if (urls.length < 2) {
+          alert("Carousel needs at least 2 media links (max 10).");
+          setIsSubmitting(false);
+          return;
+        }
+        payload = {
+          account_id: selectedAccount.id,
+          platform: "instagram",
+          post_type: "carousel",
+          media_url: JSON.stringify({ type: "carousel", urls }),
+          caption: formData.caption,
+          scheduled_at: formData.scheduled_at,
+          asset_id: formData.asset_id ?? null,
+          client_request_id: formData.client_request_id ?? null,
+          ...extras,
+        };
+      } else {
+        const url = String(formData.media_url || "").trim();
+        if (!url) {
+          alert("Please enter a media URL.");
+          setIsSubmitting(false);
+          return;
+        }
+        if (looksLikeVideo(url)) {
+          payload = {
+            account_id: selectedAccount.id,
+            platform: "instagram",
+            post_type: reelMode === "reels_only" ? "reel_only" : "reel_feed",
+            media_url: url,
+            caption: formData.caption,
+            scheduled_at: formData.scheduled_at,
+            asset_id: formData.asset_id ?? null,
+            client_request_id: formData.client_request_id ?? null,
+            ...extras,
+          };
+        } else {
+          payload = {
+            account_id: selectedAccount.id,
+            platform: "instagram",
+            post_type: "photo",
+            media_url: url,
+            caption: formData.caption,
+            scheduled_at: formData.scheduled_at,
+            asset_id: formData.asset_id ?? null,
+            client_request_id: formData.client_request_id ?? null,
+            ...extras,
+          };
+        }
+      }
+
+  
+      // Call API
+      const res = await PostsClient.createPost(payload);
+  
+      // Normalize datetime to ISO so Calendar can read it
+      const dt = new Date(formData.scheduled_at);
+      const scheduledISO = isNaN(dt.getTime())
+        ? formData.scheduled_at
+        : dt.toISOString();
+  
+      // Pass a post-shaped object to the parent (what Calendar expects)
+      const uiPost = {
+        id: res?.id,                         // backend returns { id, status }
+        status: res?.status || "scheduled",
+        account_id: selectedAccount.id,
+        post_type: payload.post_type,
+        media_url: payload.media_url,
+        caption: payload.caption,
+        scheduled_at: scheduledISO,
+      };
+  
+      onSave?.(uiPost);
     } finally {
       setIsSubmitting(false);
     }
   };
+  
+  
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (readOnly) return;
-    if (!selectedAccount) {
-      alert("Please select an account first.");
-      return;
-    }
-    // block normal save if conflict exists
-    if (hasConflict) return;
-    await doSave(formData);
+    if (!selectedAccount) { alert("Please select an account first."); return; }
+    if (hasConflict) return; // blocked until checkbox is checked
+  
+    await doSave({
+      override_spacing: false,
+    });
   };
+  
 
   const handleOverrideSave = async () => {
-    if (readOnly) return;
-    if (!selectedAccount) {
-      alert("Please select an account first.");
-      return;
-    }
-    await doSave(formData); // bypass spacing block
+    // legacy button path still works if you keep it anywhere
+    await doSave({ override_spacing: true });
   };
-
+  
   const handlePostNowNew = async () => {
     if (readOnly) return;
-    if (!selectedAccount) {
-      alert("Please select an account first.");
-      return;
-    }
+    if (!selectedAccount) { alert("Please select an account first."); return; }
     if (!window.confirm("Post now?")) return;
     const nowVal = toLocalInputValue(new Date());
-    await doSave({ ...formData, scheduled_at: nowVal });
+    await doSave({
+      scheduled_at: nowVal,
+      override_spacing: true,
+    });
   };
+  
+  
 
   const autoPickTime = () => {
     if (readOnly) return;
@@ -204,6 +337,23 @@ export default function PostEditor({
   // ---------- UI ----------
   const title =
     post ? `Post for @${selectedAccount?.handle}` : `New Post for @${selectedAccount?.handle}`;
+
+  const mediaUrl = String(formData.media_url || "");
+
+  const isVideoUrl = (u='') =>
+    /\.(mp4|mov|m4v|webm)$/i.test((u.split('?')[0] || ''));
+    
+    
+  const getPreviewSrc = (u = "") => {
+    if (!u) return "";
+    if (u.startsWith("blob:") || u.startsWith("data:")) return u;
+    if (!/^https?:\/\//i.test(u)) return "";
+    if (isPlaceholderHost(u)) return ""; // skip doomed previews
+    return `/api/media/proxy?url=${encodeURIComponent(u)}&ref=${encodeURIComponent(window.location.origin)}`;
+  };
+
+  const previewSrc = getPreviewSrc(String(formData.media_url || ''));
+  
 
   return (
     <motion.div
@@ -239,54 +389,148 @@ export default function PostEditor({
         <CardContent className="p-6 overflow-y-auto flex-1">
           <form onSubmit={handleSubmit} className="space-y-6 h-full flex flex-col">
             <div className="space-y-2">
-              <Label htmlFor="media_url">Media URL</Label>
-              <Input
-                id="media_url"
-                value={formData.media_url}
-                onChange={(e) => setFormData({ ...formData, media_url: e.target.value })}
-                placeholder="https://.../image.jpg"
-                disabled={readOnly}
-                readOnly={readOnly}
-                className={readOnly ? "bg-gray-50 cursor-default" : ""}
-              />
-              {formData.media_url && (
-                <div className="mt-2">
-                  <img
-                    src={formData.media_url}
-                    alt="Preview"
-                    className="w-full h-40 object-cover rounded-lg"
-                  />
+              {/* Carousel toggle (disabled in v1) */}
+              {CAROUSEL_ENABLED && (
+                <div className="mb-2">
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4"
+                      checked={isCarousel}
+                      onChange={(e) => setIsCarousel(e.target.checked)}
+                      disabled={readOnly}
+                    />
+                    <span className="text-sm font-medium">Carousel</span>
+                    <span className="text-xs text-muted-foreground">(2–10 items via API)</span>
+                  </label>
                 </div>
               )}
-            </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="caption">Caption</Label>
-              <Textarea
-                id="caption"
-                value={formData.caption}
-                onChange={(e) => setFormData({ ...formData, caption: e.target.value })}
-                placeholder="Write your caption..."
-                className={`min-h-[120px] resize-none ${readOnly ? "bg-gray-50 cursor-default" : ""}`}
-                disabled={readOnly}
-                readOnly={readOnly}
-              />
-            </div>
+              {CAROUSEL_ENABLED && isCarousel ? (
+                <div className="space-y-2 mb-3">
+                  {carouselUrls.map((v, i) => (
+                    <div key={i} className="flex gap-2">
+                      <Input
+                        placeholder={`Media link ${i + 1}`}
+                        value={v}
+                        onChange={(e) => {
+                          const next = [...carouselUrls];
+                          next[i] = e.target.value;
+                          setCarouselUrls(next);
+                        }}
+                        disabled={readOnly}
+                        readOnly={readOnly}
+                        className={readOnly ? "bg-gray-50 cursor-default" : ""}
+                      />
+                      {carouselUrls.length > 2 && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() =>
+                            setCarouselUrls(carouselUrls.filter((_, idx) => idx !== i))
+                          }
+                          disabled={readOnly}
+                        >
+                          Remove
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                  {carouselUrls.length < 10 && (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => setCarouselUrls([...carouselUrls, ""])}
+                      disabled={readOnly}
+                    >
+                      + Add Media Link
+                    </Button>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-2">
+                    <Label htmlFor="media_url">Media URL</Label>
+                    <Input
+                      id="media_url"
+                      value={formData.media_url}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        const maybe = extractCaptionFromString(v);
+                        setFormData((prev) => {
+                          const next = { ...prev, media_url: v };
+                          if (maybe && (!prev.caption || prev.caption.trim() === "")) {
+                            next.caption = maybe;
+                          }
+                          return next;
+                        });
+                      }}
+                      placeholder="https://.../image-or-video.ext"
+                      disabled={readOnly}
+                      readOnly={readOnly}
+                      className={readOnly ? "bg-gray-50 cursor-default" : ""}
+                    />
+                    
+                    {/* PNG warning */}
+                    {formData.media_url && isPng(formData.media_url) && (
+                      <div className="text-sm text-red-600 flex items-center gap-2 mt-1">
+                        <AlertTriangle className="w-4 h-4" />
+                        <span>PNG is not currently supported.</span>
+                      </div>
+                    )}
 
-            <div className="space-y-2">
-              <Label htmlFor="first_comment">First Comment (Optional)</Label>
-              <Textarea
-                id="first_comment"
-                value={formData.first_comment}
-                onChange={(e) => setFormData({ ...formData, first_comment: e.target.value })}
-                placeholder="Add a first comment..."
-                className={`min-h-[60px] resize-none ${readOnly ? "bg-gray-50 cursor-default" : ""}`}
-                disabled={readOnly}
-                readOnly={readOnly}
-              />
-            </div>
-
-            <div className="space-y-2">
+                    {previewSrc ? (
+                      isVideoUrl(formData.media_url) ? (
+                        <video key={previewSrc} src={previewSrc} controls preload="metadata" playsInline />
+                      ) : (
+                        <img src={previewSrc} alt="Preview" />
+                      )
+                    ) : (
+                      <div style={{fontSize:12,color:"#6b7280"}}>Preview unavailable — enter a public URL.</div>
+                    )}
+                  </div>
+              
+                  {/* Video destination (only when single URL is a video) */}
+                  {looksLikeVideo(formData.media_url) && (
+                    <div className="mt-2">
+                      <div className="text-sm font-medium mb-1">Video destination</div>
+                      <label className="flex items-center gap-2 mb-1">
+                        <input
+                          type="radio"
+                          name="reelMode"
+                          checked={reelMode === "feed_and_reels"}
+                          onChange={() => setReelMode("feed_and_reels")}
+                          disabled={readOnly}
+                        />
+                        <span className="text-sm">Post to feed and Reels</span>
+                      </label>
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          name="reelMode"
+                          checked={reelMode === "reels_only"}
+                          onChange={() => setReelMode("reels_only")}
+                          disabled={readOnly}
+                        />
+                        <span className="text-sm">Post as Reel only</span>
+                      </label>
+                    </div>
+                  )}
+                </>
+              )}
+              {/* Caption (always visible) */}
+              <div className="space-y-2">
+                <Label htmlFor="caption">Caption</Label>
+                <Textarea
+                  id="caption"
+                  value={formData.caption}
+                  onChange={(e) => setFormData({ ...formData, caption: e.target.value })}
+                  placeholder="Write your caption..."
+                  className={`min-h-[120px] resize-none ${readOnly ? "bg-gray-50 cursor-default" : ""}`}
+                  disabled={readOnly}
+                  readOnly={readOnly}
+                />
+              </div>
               <Label htmlFor="scheduled_at">Scheduled Time</Label>
               <div className="flex items-center gap-2">
                 <Input
@@ -328,15 +572,16 @@ export default function PostEditor({
                   <AlertTriangle className="w-4 h-4 mt-0.5" />
                   <div className="flex-1">
                     <div className="text-xs">{conflictMsg}</div>
-                    <div className="mt-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={handleOverrideSave}
-                        className="text-amber-700 border-amber-300"
-                      >
-                        Override &amp; Save
-                      </Button>
+                    <div className="mt-2 flex items-center gap-3">
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4"
+                          checked={overrideSpacing}
+                          onChange={(e) => setOverrideSpacing(e.target.checked)}
+                        />
+                        <span className="text-sm font-medium">Override 15-minute spacing</span>
+                      </label>
                     </div>
                   </div>
                 </div>
@@ -367,13 +612,19 @@ export default function PostEditor({
                 ) : (
                   <>
                     <Button
-                      type="submit"
-                      disabled={isSubmitting}
-                      className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white"
+                      onClick={() => doSave({ override_spacing: overrideSpacing })}
+                      disabled={isSubmitting || (hasConflict && !overrideSpacing)}
+                      className="bg-gradient-to-r from-purple-500 to-pink-500 text-white disabled:opacity-60"
+                      title={
+                        hasConflict && !overrideSpacing
+                          ? "Check 'Override 15-minute spacing' to save"
+                          : "Save post"
+                      }
                     >
-                      <Save className="w-4 h-4 mr-2" />
-                      {isSubmitting ? "Saving..." : "Save Post"}
+                      Save Post
                     </Button>
+
+
 
                     {!post && (
                       <Button

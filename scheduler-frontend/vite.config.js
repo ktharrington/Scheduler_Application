@@ -8,7 +8,11 @@ export default defineConfig({
     alias: { '@': path.resolve(__dirname, '.') }
   },
   server: {
-    proxy: { '/api': 'http://localhost:8080' }
+    port: 5173,
+    proxy: {
+      '/api':   { target: 'http://localhost:8080', changeOrigin: true },
+      '/media': { target: 'http://localhost:8080', changeOrigin: true },
+    }
   },
   // 👇 tell esbuild (during optimizeDeps) that .js files may contain JSX
   optimizeDeps: {

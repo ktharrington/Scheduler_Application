@@ -22,6 +22,8 @@ services:
       - S3_BUCKET=${S3_BUCKET}
       - S3_PREFIX=${S3_PREFIX}
       - S3_OBJECT_ACL_PUBLIC_READ=${S3_OBJECT_ACL_PUBLIC_READ}
+      - R2_PUBLIC_BASE_URL=https://pub-acba9cd71cf347c3a34123bd7475dd79.r2.dev
+      - S3_PUBLIC_BASE_URL=https://pub-acba9cd71cf347c3a34123bd7475dd79.r2.dev
 
   worker:
     build: .

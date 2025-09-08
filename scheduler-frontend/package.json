@@ -15,6 +15,7 @@
   "license": "ISC",
   "dependencies": {
     "@hello-pangea/dnd": "^18.0.1",
+    "@radix-ui/react-dialog": "^1.1.15",
     "axios": "^1.11.0",
     "date-fns": "^4.1.0",
     "framer-motion": "^12.23.12",
